@@ -18,12 +18,11 @@ packages = [
 {include = "tunneltop"}
 ]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-
-
 [tool.poetry.scripts]
 tunneltop = "tunneltop:main"
+
+[tool.poetry.dependencies]
+python = "^3.11"
 
 [build-system]
 requires = ["poetry-core"]

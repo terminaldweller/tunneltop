@@ -1,7 +1,8 @@
 #!/usr/bin/env python
-"""A top-like program for monitoring ssh tunnels"""
+"""A top-like program for monitoring ssh tunnels or any tunnels"""
 # TODO- the disabled coloring is not working
 # TODO- quit doesnt work
+# TODO- we are reviving dead tunnels
 import argparse
 import asyncio
 import copy
@@ -284,7 +285,7 @@ class TunnelManager:
             return await proc.communicate()
         except asyncio.TimeoutError:
             proc.terminate()
-            return (bytes(), bytes())
+            raise
         except asyncio.CancelledError:
             proc.terminate()
             raise
@@ -308,12 +309,14 @@ class TunnelManager:
             return stdout, stderr
         except asyncio.TimeoutError:
             self.data_cols[task_name]["status"] = "TMOUT"
+            self.data_cols[task_name]["stdout"] = "-"
+            self.data_cols[task_name]["stderr"] = "-"
             raise
 
     async def tunnel_procs(
         self,
     ) -> typing.List[asyncio.Task]:
-        """run all the tunnels in the background as separate tasks"""
+        """run all the tunnels in the background as separate subprocesses"""
         tasks: typing.List[asyncio.Task] = []
         for _, value in self.data_cols.items():
             tasks.append(
@@ -446,7 +449,7 @@ class TunnelManager:
 
     async def quit(self) -> None:
         """Cleanly quit the applicaiton"""
-        # scheduler checks for this so stop making new tasks
+        # scheduler checks for this to stop running new tests
         # when we want to quit
         self.are_we_dying = True
 
@@ -459,7 +462,7 @@ class TunnelManager:
             sys.exit(0)
 
     async def scheduler(self) -> None:
-        """schedulaer manages running the tests and reviving dead tunnels"""
+        """scheduler manages running the tests and reviving dead tunnels"""
         try:
             while True:
                 if self.are_we_dying:
