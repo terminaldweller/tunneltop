@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "tunneltop"
+version = "0.1.0"
+description = "A top-like tunnel manager"
+authors = ["terminaldwelelr <devi@terminaldweller.com>"]
+license = "GPL-3.0"
+readme = "README.md"
+homepage = "https://github.com/terminaldweller/tunneltop"
+repository = "https://github.com/terminaldweller/tunneltop"
+keywords = ["tunnel","top","ssh"]
+classifiers = [
+    "Environment :: Console",
+]
+include = [
+    "LICENSE",
+]
+packages = [
+{include = "tunneltop"}
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[tool.poetry.scripts]
+tunneltop = "tunneltop:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
