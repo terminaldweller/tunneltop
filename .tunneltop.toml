@@ -1,0 +1,19 @@
+[socks5ir]
+address = "127.0.0.1"
+port = 9997
+command = "autossh -M 0 -N -D 9997 -o ServerAliveInterval=180 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -l debian -p 22 100.100.100.101"
+test_command = 'curl "%{http_code}" -k -I -4 --socks5 socks5h://127.0.0.1:9997 https://icanhazip.com'
+# test_command = ""
+test_command_result = "200"
+test_interval = 300
+test_timeout = 10
+
+[socks5_3]
+address = "127.0.0.1"
+port = 9995
+command = "autossh -M 0 -N -D 0.0.0.0:9995 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o VerifyHostKeyDNS=no -o ServerAliveInterval=180 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -l debian -p 2022 100.100.100.100"
+test_command = 'curl "%{http_code}" -k -I -4 --socks5 socks5h://127.0.0.1:9995 https://icanhazip.com'
+# test_command = ""
+test_command_result = "200"
+test_interval = 300
+test_timeout = 10
