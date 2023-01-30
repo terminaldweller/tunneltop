@@ -3,6 +3,11 @@ A tunnel manager in the familiar top style with ncurses and asyncio.
 
 ![Image](tunneltop.png)
 
+## Install
+```sh
+pip install tunneltop
+```
+
 ## what it is
 * a simple tunnel manager written in python that uses the standard library only(standard library only in python 3.11)
 * it starts and manages the tunnels for you
