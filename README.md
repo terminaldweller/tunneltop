@@ -1,5 +1,5 @@
 # tunneltop
-A tunnel manager in the familiar top style with ncurses and asyncio.
+A tunnel manager in the familiar top style written with ncurses and asyncio.
 
 ![Image](tunneltop.png)
 
@@ -72,5 +72,7 @@ How long before the test is considered to have timed out.</br>
 `s` toggles a tunnel from enabled to disabled or vice versa.</br>
 
 `r`  restarts a tunnel.</br>
+
+To quit send a `SIGINT` or a `SIGTERM`. I'm working on improving this of course.</br>
 
 tunneltop will reload its config file upon receiving a `SIGHUP` and apply the changes immediately if there are any.</br>
