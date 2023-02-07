@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 """A top-like program for monitoring ssh tunnels or any tunnels"""
 # TODO- quit doesnt work
-# TODO- we are not reviving dead tunnels
-# TODO- add a debug switch
 import argparse
 import asyncio
 import copy
@@ -33,6 +31,13 @@ class Argparser:  # pylint: disable=too-few-public-methods
             "-n",
             type=bool,
             help="Dont print the header in the output",
+            default=False,
+        )
+        self.parser.add_argument(
+            "--debug",
+            "-g",
+            type=bool,
+            help="Print debug info to logfile, in $HOME/.tunneltoplog",
             default=False,
         )
         self.parser.add_argument(
@@ -307,6 +312,7 @@ class TunnelManager:
                             "test_timeout": tunnel_value["test_timeout"],
                             "stdout": "n/a",
                             "stderr": "n/a",
+                            "disabled": "",
                         }
                 elif key == "color":
                     for color_key, color_value in value.items():
@@ -376,8 +382,10 @@ class TunnelManager:
 
         return tasks
 
-    async def sighup_handler_async_worker(self, data_cols_new) -> None:
-        """Handles the actual updating of tasks when we get SIGTERM"""
+    async def sighup_handler_update_tasks(
+        self, data_cols_new: typing.Dict[str, typing.Any]
+    ) -> None:
+        """Updates existing tasks"""
         delete_task: typing.Optional[asyncio.Task] = None
         for k, value in data_cols_new.items():
             if k not in self.data_cols:
@@ -415,6 +423,11 @@ class TunnelManager:
                         self.scheduler_table[k] = 0
                     await asyncio.sleep(0)
 
+    async def sighup_handler_remove_old_tasks(
+        self, data_cols_new: typing.Dict[str, typing.Any]
+    ) -> None:
+        """Removes old tasks"""
+        delete_task: typing.Optional[asyncio.Task] = None
         for k, _ in self.data_cols.items():
             if k not in data_cols_new:
                 for task in self.tunnel_tasks:
@@ -428,6 +441,13 @@ class TunnelManager:
                 if k in self.scheduler_table:
                     del self.scheduler_table[k]
 
+    async def sighup_handler_async_worker(
+        self, data_cols_new: typing.Dict[str, typing.Any]
+    ) -> None:
+        """Handles the actual updating of tasks when we get SIGTERM"""
+        await self.sighup_handler_update_tasks(data_cols_new)
+        await self.sighup_handler_remove_old_tasks(data_cols_new)
+
     async def sighup_handler(self) -> None:
         """SIGHUP handler. we want to reload the config."""
         # type: ignore # pylint: disable=E0203
@@ -436,8 +456,10 @@ class TunnelManager:
         self.init_color_pairs()
         await self.sighup_handler_async_worker(data_cols_new)
 
-    def write_log(self, log: str):
+    def write_log(self, log: str) -> None:
         """A simple logger"""
+        if not self.argparser.args.debug:
+            return
         with open(
             os.path.expanduser("~/.tunneltoplog"),
             "a",
@@ -469,6 +491,7 @@ class TunnelManager:
             if task.get_name() == name:
                 await self.stop_task(task, self.tunnel_tasks)
                 was_active = True
+                self.data_cols[name]["disabled"] = "manual"
                 break
 
         if not was_active:
@@ -479,6 +502,7 @@ class TunnelManager:
                     name=tunnel_entry["name"],
                 )
             )
+            self.data_cols[name]["disabled"] = ""
             await asyncio.sleep(0)
 
     async def quit(self) -> None:
@@ -495,6 +519,21 @@ class TunnelManager:
         finally:
             sys.exit(0)
 
+    async def revive_failed_tasks(self) -> None:
+        """Revives failed tasks"""
+        task_names: typing.Dict[str, typing.Any] = {}
+        for task in self.tunnel_tasks:
+            task_names[task.get_name()] = True
+        for name, task_info in self.data_cols.items():
+            if name not in task_names and task_info["disabled"] != "manual":
+                self.tunnel_tasks.append(
+                    asyncio.create_task(
+                        self.run_subprocess(task_info["command"]),
+                        name=task_info["name"],
+                    ),
+                )
+                await asyncio.sleep(0)
+
     async def scheduler(self) -> None:
         """scheduler manages running the tests and reviving dead tunnels"""
         try:
@@ -504,6 +543,7 @@ class TunnelManager:
             while True:
                 if self.are_we_dying:
                     return
+                await self.revive_failed_tasks()
                 for key, value in self.scheduler_table.items():
                     if value == 0 and key not in self.tunnel_test_tasks:
                         self.write_log("rescheduling test for " + key + "\n")
@@ -530,7 +570,7 @@ class TunnelManager:
                 # we are using a 1 second ticker. basically the scheduler
                 # runs every second instead of as fast as it can
                 await asyncio.sleep(1)
-                for test_task_name in self.tunnel_test_tasks.keys():
+                for test_task_name in self.tunnel_test_tasks:
                     self.write_log(test_task_name + " ")
                 self.write_log(repr(self.scheduler_table))
                 self.write_log("\n")
