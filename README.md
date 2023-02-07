@@ -22,7 +22,23 @@ tunneltop expects its config file to be at at `$HOME/.tunneltoprc`.
 
 You can see an example config file below:</br>
 ```toml
-[socks5ir]
+[color]
+header_fg = 4
+header_bg = 0
+active_fg = 23
+active_bg = 0
+disabled_fg = 8
+disabled_bg = 0
+timeout_fg = 63
+timeout_bg = 0
+unknown_fg = 38
+unknown_bg = 0
+down_fg = 208
+down_bg = 0
+box_fg = 22
+box_bg = 0
+
+[tunnel.socks5ir]
 address = "127.0.0.1"
 port = 9997
 command = "autossh -M 0 -N -D 9997 -o ServerAliveInterval=180 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -l debian -p 22 100.100.100.101"
@@ -31,7 +47,7 @@ test_command_result = "200"
 test_interval = 300
 test_timeout = 10
 
-[socks5_3]
+[tunnel.socks5_3]
 address = "127.0.0.1"
 port = 9995
 command = "autossh -M 0 -N -D 0.0.0.0:9995 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o VerifyHostKeyDNS=no -o ServerAliveInterval=180 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -l debian -p 2022 100.100.100.100"

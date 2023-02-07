@@ -155,7 +155,7 @@ def render(
         [v["stderr"] for _, v in data_cols.items()],
     )
     iterator = iter(lines)
-    stdscr.addstr(1, 1, lines[0], curses.color_pair(3))
+    stdscr.addstr(1, 1, lines[0], curses.color_pair(1))
     next(iterator)
     name_list = {}
     for task in tasks:
@@ -168,11 +168,11 @@ def render(
             if data_cols[name]["status"] == "UP":
                 color_num = 2
             elif data_cols[name]["status"] == "DOWN":
-                color_num = 8
+                color_num = 10
             elif data_cols[name]["status"] == "UNKWN":
                 color_num = 6
             elif data_cols[name]["status"] == "TMOUT":
-                color_num = 10
+                color_num = 8
             else:
                 color_num = 2
         if i == sel:
@@ -190,39 +190,20 @@ def render(
                 curses.color_pair(color_num),
             )
         stdscr.addstr("\n")
+
+    stdscr.attron(curses.color_pair(22))
     stdscr.box()
+    stdscr.attroff(curses.color_pair(22))
 
 
-def curses_init():
-    """Initialize ncurses"""
-    stdscr = curses.initscr()
-    curses.start_color()
-    curses.use_default_colors()
-    curses.curs_set(False)
-    curses.noecho()
-    curses.cbreak()
-    stdscr.keypad(True)
-    curses.halfdelay(2)
-    curses.init_pair(1, curses.COLOR_BLUE, curses.COLOR_BLACK)
-    curses.init_pair(2, 23, curses.COLOR_BLACK)
-    curses.init_pair(3, curses.COLOR_BLACK, 23)
-    curses.init_pair(4, 25, curses.COLOR_BLACK)
-    curses.init_pair(5, curses.COLOR_BLACK, 25)
-    curses.init_pair(6, 63, curses.COLOR_BLACK)
-    curses.init_pair(7, curses.COLOR_BLACK, 63)
-    curses.init_pair(8, 38, curses.COLOR_BLACK)
-    curses.init_pair(9, curses.COLOR_BLACK, 38)
-    curses.init_pair(8, 208, curses.COLOR_BLACK)
-    curses.init_pair(9, curses.COLOR_BLACK, 208)
-
-    return stdscr
-
-
+# pylint: disable=too-many-instance-attributes
 class TunnelManager:
     """The tunnel top class"""
 
     def __init__(self):
+        self.stdscr = curses.initscr()
         self.argparser = Argparser()
+        self.colos: typing.Dict[str, int] = {}
         self.data_cols: typing.Dict[
             str, typing.Dict[str, str]
         ] = self.read_conf()
@@ -235,6 +216,41 @@ class TunnelManager:
         # we use this when its time to quit. this will prevent any
         # new tasks from being scheduled
         self.are_we_dying: bool = False
+
+    def init_color_pairs(self) -> None:
+        """Initialize the curses color pairs"""
+        curses.init_pair(
+            1,
+            self.colos["header_fg"],
+            self.colos["header_bg"],
+        )
+        curses.init_pair(2, self.colos["active_fg"], self.colos["active_bg"])
+        curses.init_pair(3, self.colos["active_bg"], self.colos["active_fg"])
+        curses.init_pair(
+            4, self.colos["disabled_fg"], self.colos["disabled_bg"]
+        )
+        curses.init_pair(
+            5, self.colos["disabled_bg"], self.colos["disabled_fg"]
+        )
+        curses.init_pair(6, self.colos["unknown_fg"], self.colos["unknown_bg"])
+        curses.init_pair(7, self.colos["unknown_bg"], self.colos["unknown_fg"])
+        curses.init_pair(8, self.colos["timeout_fg"], self.colos["timeout_bg"])
+        curses.init_pair(9, self.colos["timeout_bg"], self.colos["timeout_fg"])
+        curses.init_pair(10, self.colos["down_fg"], self.colos["down_bg"])
+        curses.init_pair(11, self.colos["down_bg"], self.colos["down_fg"])
+
+        curses.init_pair(22, self.colos["box_fg"], self.colos["box_bg"])
+
+    def curses_init(self) -> None:
+        """Initialize ncurses"""
+        curses.start_color()
+        curses.use_default_colors()
+        curses.curs_set(False)
+        curses.noecho()
+        curses.cbreak()
+        self.stdscr.keypad(True)
+        curses.halfdelay(2)
+        self.init_color_pairs()
 
     def init_scheduler_table(self) -> typing.Dict[str, int]:
         """initialize the scheduler table"""
@@ -275,19 +291,27 @@ class TunnelManager:
         ) as conf_file:
             data = tomllib.load(conf_file)
             for key, value in data.items():
-                data_cols[key] = {
-                    "name": key,
-                    "address": value["address"],
-                    "port": value["port"],
-                    "command": value["command"],
-                    "status": "UNKWN",
-                    "test_command": value["test_command"],
-                    "test_command_result": value["test_command_result"],
-                    "test_interval": value["test_interval"],
-                    "test_timeout": value["test_timeout"],
-                    "stdout": "n/a",
-                    "stderr": "n/a",
-                }
+                if key == "tunnel":
+                    for tunnel_key, tunnel_value in value.items():
+                        data_cols[tunnel_key] = {
+                            "name": tunnel_key,
+                            "address": tunnel_value["address"],
+                            "port": tunnel_value["port"],
+                            "command": tunnel_value["command"],
+                            "status": "UNKWN",
+                            "test_command": tunnel_value["test_command"],
+                            "test_command_result": tunnel_value[
+                                "test_command_result"
+                            ],
+                            "test_interval": tunnel_value["test_interval"],
+                            "test_timeout": tunnel_value["test_timeout"],
+                            "stdout": "n/a",
+                            "stderr": "n/a",
+                        }
+                elif key == "color":
+                    for color_key, color_value in value.items():
+                        self.colos[color_key] = color_value
+
         return data_cols
 
     async def run_subprocess(self, cmd: str) -> typing.Tuple[bytes, bytes]:
@@ -409,6 +433,7 @@ class TunnelManager:
         # type: ignore # pylint: disable=E0203
         data_cols_new: typing.Dict[str, typing.Dict[str, str]] = {}
         data_cols_new = self.read_conf()
+        self.init_color_pairs()
         await self.sighup_handler_async_worker(data_cols_new)
 
     def write_log(self, log: str):
@@ -516,7 +541,7 @@ class TunnelManager:
         """the tui loop"""
         sel: int = 0
         try:
-            stdscr = curses_init()
+            self.curses_init()
             # we spawn the tunnels and the test scheduler put them
             # in the background and then run the TUI loop
             self.tunnel_tasks = await self.tunnel_procs()
@@ -530,9 +555,9 @@ class TunnelManager:
             )
 
             while True:
-                stdscr.clear()
-                render(self.data_cols, self.tunnel_tasks, stdscr, sel)
-                char = stdscr.getch()
+                self.stdscr.clear()
+                render(self.data_cols, self.tunnel_tasks, self.stdscr, sel)
+                char = self.stdscr.getch()
 
                 if char == ord("j") or char == curses.KEY_DOWN:
                     sel = (sel + 1) % len(self.data_cols)
@@ -543,19 +568,19 @@ class TunnelManager:
                 elif char == ord("G") or char == curses.KEY_UP:
                     sel = len(self.data_cols) - 1
                 elif char == ord("r"):
-                    line_content = stdscr.instr(sel + 2, 1)
+                    line_content = self.stdscr.instr(sel + 2, 1)
                     await self.restart_task(line_content.decode("utf-8"))
                 elif char == ord("q"):
                     await self.quit()
                 elif char == ord("s"):
-                    line_content = stdscr.instr(sel + 2, 1)
+                    line_content = self.stdscr.instr(sel + 2, 1)
                     await self.flip_task(line_content.decode("utf-8"))
 
-                stdscr.refresh()
+                self.stdscr.refresh()
                 await asyncio.sleep(0)
         finally:
             curses.nocbreak()
-            stdscr.keypad(False)
+            self.stdscr.keypad(False)
             curses.echo()
             curses.endwin()
             await self.quit()
