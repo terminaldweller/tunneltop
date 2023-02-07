@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """A top-like program for monitoring ssh tunnels or any tunnels"""
-# TODO- the disabled coloring is not working
 # TODO- quit doesnt work
-# TODO- we are reviving dead tunnels
+# TODO- we are not reviving dead tunnels
 import argparse
 import asyncio
 import copy
@@ -469,6 +468,9 @@ class TunnelManager:
                             tunnel_entry["test_interval"]
                         )
                         await asyncio.sleep(0)
+                        self.scheduler_table[key] = int(
+                            self.data_cols[key]["test_interval"]
+                        )
                     else:
                         self.scheduler_table[key] = (
                             self.scheduler_table[key] - 1
