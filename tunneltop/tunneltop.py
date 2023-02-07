@@ -191,7 +191,8 @@ def curses_init():
     curses.noecho()
     curses.cbreak()
     stdscr.keypad(True)
-    curses.halfdelay(20)
+    # stdscr.nodelay(True)
+    curses.halfdelay(2)
     curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_GREEN)
     curses.init_pair(3, curses.COLOR_BLUE, curses.COLOR_BLACK)
@@ -456,6 +457,7 @@ class TunnelManager:
     async def scheduler(self) -> None:
         """scheduler manages running the tests and reviving dead tunnels"""
         try:
+            await asyncio.sleep(5)
             while True:
                 if self.are_we_dying:
                     return

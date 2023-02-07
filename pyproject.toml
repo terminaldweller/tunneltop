@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tunneltop"
-version = "0.1.4"
+version = "0.1.5"
 description = "A top-like tunnel manager"
 authors = ["terminaldwelelr <devi@terminaldweller.com>"]
 license = "GPL-3.0"
