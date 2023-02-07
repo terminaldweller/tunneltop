@@ -157,29 +157,27 @@ def render(
     iterator = iter(lines)
     stdscr.addstr(1, 1, lines[0], curses.color_pair(3))
     next(iterator)
-    for i, line in enumerate(iterator):
-        try:
-            line_content = stdscr.instr(sel + 2, 1).decode("utf-8")
-            name: str = line_content[: line_content.find(" ")]
-        finally:
-            name = ""
+    name_list = {}
+    for task in tasks:
+        name_list[task.get_name()] = True
+    for i, (line, name) in enumerate(zip(iterator, data_cols.keys())):
         if i == sel:
             stdscr.addstr(
                 (2 + i) % (len(lines) + 1),
                 1,
                 line,
-                curses.color_pair(2)
-                if name not in tasks
-                else curses.color_pair(5),
+                curses.color_pair(5)
+                if name not in name_list
+                else curses.color_pair(2),
             )
         else:
             stdscr.addstr(
                 2 + i,
                 1,
                 line,
-                curses.color_pair(1)
-                if name not in tasks
-                else curses.color_pair(4),
+                curses.color_pair(4)
+                if name not in name_list
+                else curses.color_pair(1),
             )
         stdscr.addstr("\n")
     stdscr.box()
@@ -353,8 +351,6 @@ class TunnelManager:
                         if task.get_name() == k:
                             delete_task = task
                             break
-                            # task.cancel()
-                            # await asyncio.sleep(0)
 
                     if delete_task is not None:
                         await self.stop_task(delete_task, self.tunnel_tasks)
@@ -373,8 +369,6 @@ class TunnelManager:
             if k not in data_cols_new:
                 for task in self.tunnel_tasks:
                     if task.get_name() == k:
-                        # task.cancel()
-                        # await asyncio.sleep(0)
                         delete_task = task
                         break
                 if delete_task is not None:
@@ -394,7 +388,7 @@ class TunnelManager:
     def write_log(self, log: str):
         """A simple logger"""
         with open(
-            "/home/devi/devi/abbatoir/hole15/log",
+            os.path.expanduser("~/.tunneltoplog"),
             "a",
             encoding="utf-8",
         ) as logfile:
@@ -403,14 +397,9 @@ class TunnelManager:
     async def restart_task(self, line_content: str) -> None:
         """restart a task"""
         name: str = line_content[: line_content.find(" ")]
-        # was_cancelled: bool = False
         for task in self.tunnel_tasks:
             if task.get_name() == name:
-                # was_cancelled = task.cancel()
-                # self.write_log(f"was_cancelled: {was_cancelled}")
                 await self.stop_task(task, self.tunnel_tasks)
-                # await task
-                # await asyncio.sleep(0)
                 for _, value in self.data_cols.items():
                     if value["name"] == name and task.cancelled():
                         self.tunnel_tasks.append(
@@ -424,15 +413,10 @@ class TunnelManager:
     async def flip_task(self, line_content: str) -> None:
         """flip a task"""
         name: str = line_content[: line_content.find(" ")]
-        # was_cancelled: bool = False
         was_active: bool = False
         for task in self.tunnel_tasks:
             if task.get_name() == name:
                 await self.stop_task(task, self.tunnel_tasks)
-                # was_cancelled = task.cancel()
-                # await asyncio.sleep(0)
-                # self.write_log(f"was_cancelled: {was_cancelled}")
-                # await task
                 was_active = True
                 break
 
@@ -542,9 +526,6 @@ class TunnelManager:
             stdscr.keypad(False)
             curses.echo()
             curses.endwin()
-            # tasks = asyncio.all_tasks()
-            # for task in tasks:
-            #     task.cancel()
             await self.quit()
 
 
