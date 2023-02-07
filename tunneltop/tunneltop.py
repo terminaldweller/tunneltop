@@ -2,6 +2,7 @@
 """A top-like program for monitoring ssh tunnels or any tunnels"""
 # TODO- quit doesnt work
 # TODO- we are not reviving dead tunnels
+# TODO- add a debug switch
 import argparse
 import asyncio
 import copy
@@ -160,23 +161,33 @@ def render(
     for task in tasks:
         name_list[task.get_name()] = True
     for i, (line, name) in enumerate(zip(iterator, data_cols.keys())):
+        color_num: int
+        if name not in name_list:
+            color_num = 4
+        else:
+            if data_cols[name]["status"] == "UP":
+                color_num = 2
+            elif data_cols[name]["status"] == "DOWN":
+                color_num = 8
+            elif data_cols[name]["status"] == "UNKWN":
+                color_num = 6
+            elif data_cols[name]["status"] == "TMOUT":
+                color_num = 10
+            else:
+                color_num = 2
         if i == sel:
             stdscr.addstr(
                 (2 + i) % (len(lines) + 1),
                 1,
                 line,
-                curses.color_pair(5)
-                if name not in name_list
-                else curses.color_pair(2),
+                curses.color_pair(color_num + 1),
             )
         else:
             stdscr.addstr(
                 2 + i,
                 1,
                 line,
-                curses.color_pair(4)
-                if name not in name_list
-                else curses.color_pair(1),
+                curses.color_pair(color_num),
             )
         stdscr.addstr("\n")
     stdscr.box()
@@ -191,13 +202,18 @@ def curses_init():
     curses.noecho()
     curses.cbreak()
     stdscr.keypad(True)
-    # stdscr.nodelay(True)
     curses.halfdelay(2)
-    curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
-    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_GREEN)
-    curses.init_pair(3, curses.COLOR_BLUE, curses.COLOR_BLACK)
-    curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)
-    curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(1, curses.COLOR_BLUE, curses.COLOR_BLACK)
+    curses.init_pair(2, 23, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_BLACK, 23)
+    curses.init_pair(4, 25, curses.COLOR_BLACK)
+    curses.init_pair(5, curses.COLOR_BLACK, 25)
+    curses.init_pair(6, 63, curses.COLOR_BLACK)
+    curses.init_pair(7, curses.COLOR_BLACK, 63)
+    curses.init_pair(8, 38, curses.COLOR_BLACK)
+    curses.init_pair(9, curses.COLOR_BLACK, 38)
+    curses.init_pair(8, 208, curses.COLOR_BLACK)
+    curses.init_pair(9, curses.COLOR_BLACK, 208)
 
     return stdscr
 
@@ -457,6 +473,8 @@ class TunnelManager:
     async def scheduler(self) -> None:
         """scheduler manages running the tests and reviving dead tunnels"""
         try:
+            # we wait here to let the tunnels have some time
+            # before we start running tests
             await asyncio.sleep(5)
             while True:
                 if self.are_we_dying:
