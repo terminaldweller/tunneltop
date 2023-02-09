@@ -9,8 +9,8 @@ import enum
 import os
 import signal
 import sys
-import tomllib
 import typing
+import tomllib
 
 
 class Argparser:  # pylint: disable=too-few-public-methods
@@ -357,7 +357,6 @@ class TunnelManager:
                 self.data_cols[task_name]["status"] = "DOWN"
 
             del self.tunnel_test_tasks[task_name]
-            # return stdout, stderr
         except asyncio.TimeoutError:
             self.write_log(f"test for {task_name} timed out\n")
             self.data_cols[task_name]["status"] = "TMOUT"
@@ -396,8 +395,7 @@ class TunnelManager:
                 )
                 await asyncio.sleep(0)
                 self.data_cols[k] = copy.deepcopy(value)
-                if k in self.scheduler_table:
-                    self.scheduler_table[k] = 0
+                self.scheduler_table[k] = 0
             else:
                 if (
                     self.data_cols[k]["command"] != data_cols_new[k]["command"]
