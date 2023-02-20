@@ -89,6 +89,8 @@ How long before the test is considered to have timed out.</br>
 
 `r`  restarts a tunnel.</br>
 
+`t` runs the test right now.</br>
+
 To quit send a `SIGINT` or a `SIGTERM`. I'm working on improving this of course.</br>
 
 tunneltop will reload its config file upon receiving a `SIGHUP` and apply the changes immediately if there are any.</br>
