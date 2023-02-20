@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "tunneltop"
-version = "0.3.1"
+version = "0.3.2"
 description = "A top-like tunnel manager"
-authors = ["terminaldwelelr <devi@terminaldweller.com>"]
+authors = ["terminaldweller <devi@terminaldweller.com>"]
 license = "GPL-3.0"
 readme = "README.md"
 homepage = "https://github.com/terminaldweller/tunneltop"
