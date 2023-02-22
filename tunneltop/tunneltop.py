@@ -506,7 +506,7 @@ class TunnelManager:
             self.data_cols[name]["disabled"] = ""
             await asyncio.sleep(0)
 
-    def run_single_test(self, task_name):
+    def run_single_test(self, task_name) -> None:
         """Set the counter to 0 so the scheduler will run the test"""
         if task_name in self.scheduler_table:
             self.scheduler_table[task_name] = 0
@@ -618,7 +618,7 @@ class TunnelManager:
                     await self.restart_task(line_content.decode("utf-8"))
                 elif char == ord("t"):
                     line_content = self.stdscr.instr(sel + 2, 1)
-                    await self.run_single_test(line_content.decode("utf-8"))
+                    self.run_single_test(line_content.decode("utf-8"))
                 elif char == ord("q"):
                     await self.quit()
                 elif char == ord("s"):
