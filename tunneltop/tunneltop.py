@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 """A top-like program for monitoring ssh tunnels or any tunnels"""
-# TODO- quit doesnt work
 import argparse
 import asyncio
 import copy
@@ -510,6 +509,9 @@ class TunnelManager:
         """Set the counter to 0 so the scheduler will run the test"""
         if task_name in self.scheduler_table:
             self.scheduler_table[task_name] = 0
+        else:
+            if self.data_cols[task_name]["status"] != "manual":
+                self.scheduler_table[task_name] = 0
 
     async def quit(self) -> None:
         """Cleanly quit the applicaiton"""
