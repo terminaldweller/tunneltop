@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import typing
+
 import tomllib
 
 
@@ -505,8 +506,9 @@ class TunnelManager:
             self.data_cols[name]["disabled"] = ""
             await asyncio.sleep(0)
 
-    def run_single_test(self, task_name) -> None:
+    def run_single_test(self, line_content) -> None:
         """Set the counter to 0 so the scheduler will run the test"""
+        task_name: str = line_content[: line_content.find(" ")]
         if task_name in self.scheduler_table:
             self.scheduler_table[task_name] = 0
         else:
