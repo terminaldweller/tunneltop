@@ -521,13 +521,12 @@ class TunnelManager:
         # when we want to quit
         self.are_we_dying = True
 
+        # we don't have a task hierarchy so we just kill all
+        # of them without having to kill the descendants first
         for task in asyncio.all_tasks():
             task.cancel()
             await asyncio.sleep(0)
-        try:
-            await asyncio.gather(*asyncio.all_tasks())
-        finally:
-            sys.exit(0)
+        await asyncio.sleep(1)
 
     async def revive_failed_tasks(self) -> None:
         """Revives failed tasks"""
