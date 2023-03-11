@@ -105,9 +105,7 @@ def ffs(
     if header_list is not None:
         if numbered:
             numbers_f.extend(range(1, len(args[-1]) + 1))
-            max_column_width.append(
-                max(len(repr(number)) for number in numbers_f)
-            )
+            max_column_width.append(max(len(repr(number)) for number in numbers_f))
             header_list.insert(0, "idx")
 
         index = range(0, len(header_list))
@@ -116,10 +114,7 @@ def ffs(
 
         for i in index:
             dummy.append(
-                greenie
-                + bold
-                + header_list[i].ljust(max_column_width[i])
-                + endc
+                greenie + bold + header_list[i].ljust(max_column_width[i]) + endc
             )
         lines.append("".join(dummy))
         dummy.clear()
@@ -127,9 +122,7 @@ def ffs(
     index2 = range(0, len(args[-1]))
     for i in index2:
         if numbered:
-            dummy.append(
-                goo + bold + repr(i).ljust(max_column_width[0]) + endc
-            )
+            dummy.append(goo + bold + repr(i).ljust(max_column_width[0]) + endc)
             for arg, width in zip(args, max_column_width[1:]):
                 dummy.append(blueblue + (arg[i]).ljust(width) + endc)
         else:
@@ -205,19 +198,15 @@ def render(
 class TunnelManager:
     """The tunnel top class"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.stdscr = curses.initscr()
         self.argparser = Argparser()
         self.colos: typing.Dict[str, int] = {}
-        self.data_cols: typing.Dict[
-            str, typing.Dict[str, str]
-        ] = self.read_conf()
+        self.data_cols: typing.Dict[str, typing.Dict[str, str]] = self.read_conf()
         self.tunnel_tasks: typing.List[asyncio.Task] = []
         self.tunnel_test_tasks: typing.Dict[str, asyncio.Task] = {}
         self.scheduler_task: asyncio.Task
-        self.scheduler_table: typing.Dict[
-            str, int
-        ] = self.init_scheduler_table()
+        self.scheduler_table: typing.Dict[str, int] = self.init_scheduler_table()
         # we use this when its time to quit. this will prevent any
         # new tasks from being scheduled
         self.are_we_dying: bool = False
@@ -231,12 +220,8 @@ class TunnelManager:
         )
         curses.init_pair(2, self.colos["active_fg"], self.colos["active_bg"])
         curses.init_pair(3, self.colos["active_bg"], self.colos["active_fg"])
-        curses.init_pair(
-            4, self.colos["disabled_fg"], self.colos["disabled_bg"]
-        )
-        curses.init_pair(
-            5, self.colos["disabled_bg"], self.colos["disabled_fg"]
-        )
+        curses.init_pair(4, self.colos["disabled_fg"], self.colos["disabled_bg"])
+        curses.init_pair(5, self.colos["disabled_bg"], self.colos["disabled_fg"])
         curses.init_pair(6, self.colos["unknown_fg"], self.colos["unknown_bg"])
         curses.init_pair(7, self.colos["unknown_bg"], self.colos["unknown_fg"])
         curses.init_pair(8, self.colos["timeout_fg"], self.colos["timeout_bg"])
@@ -291,9 +276,7 @@ class TunnelManager:
     def read_conf(self) -> typing.Dict[str, typing.Dict[str, str]]:
         """Read the config file"""
         data_cols: typing.Dict[str, typing.Dict[str, str]] = {}
-        with open(
-            os.path.expanduser(self.argparser.args.config), "rb"
-        ) as conf_file:
+        with open(os.path.expanduser(self.argparser.args.config), "rb") as conf_file:
             data = tomllib.load(conf_file)
             for key, value in data.items():
                 if key == "tunnel":
@@ -305,14 +288,13 @@ class TunnelManager:
                             "command": tunnel_value["command"],
                             "status": "UNKWN",
                             "test_command": tunnel_value["test_command"],
-                            "test_command_result": tunnel_value[
-                                "test_command_result"
-                            ],
+                            "test_command_result": tunnel_value["test_command_result"],
                             "test_interval": tunnel_value["test_interval"],
                             "test_timeout": tunnel_value["test_timeout"],
                             "stdout": "n/a",
                             "stderr": "n/a",
                             "disabled": "",
+                            "auto_start": tunnel_value["auto_start"],
                         }
                 elif key == "color":
                     for color_key, color_value in value.items():
@@ -372,6 +354,9 @@ class TunnelManager:
         """run all the tunnels in the background as separate subprocesses"""
         tasks: typing.List[asyncio.Task] = []
         for _, value in self.data_cols.items():
+            if value["auto_start"] is False:
+                self.data_cols[value["name"]]["disabled"] = "manual"
+                continue
             tasks.append(
                 asyncio.create_task(
                     self.run_subprocess(value["command"]), name=value["name"]
@@ -389,9 +374,7 @@ class TunnelManager:
         for k, value in data_cols_new.items():
             if k not in self.data_cols:
                 self.tunnel_tasks.append(
-                    asyncio.create_task(
-                        self.run_subprocess(value["command"]), name=k
-                    )
+                    asyncio.create_task(self.run_subprocess(value["command"]), name=k)
                 )
                 await asyncio.sleep(0)
                 self.data_cols[k] = copy.deepcopy(value)
@@ -400,8 +383,7 @@ class TunnelManager:
                 if (
                     self.data_cols[k]["command"] != data_cols_new[k]["command"]
                     or self.data_cols[k]["port"] != data_cols_new[k]["port"]
-                    or self.data_cols[k]["address"]
-                    != data_cols_new[k]["address"]
+                    or self.data_cols[k]["address"] != data_cols_new[k]["address"]
                 ):
                     for task in self.tunnel_tasks:
                         if task.get_name() == k:
@@ -567,9 +549,7 @@ class TunnelManager:
                         await asyncio.sleep(0)
                         self.tunnel_test_tasks[key] = test_task
                     if value > 0:
-                        self.scheduler_table[key] = (
-                            self.scheduler_table[key] - 1
-                        )
+                        self.scheduler_table[key] = self.scheduler_table[key] - 1
                     if value <= 0:
                         self.write_log("revitalizing test for " + key + "\n")
                         self.scheduler_table[key] = int(
@@ -604,6 +584,10 @@ class TunnelManager:
             )
 
             while True:
+                if self.scheduler_task.cancelled() or self.scheduler_task.done():
+                    self.scheduler_task = asyncio.create_task(
+                        self.scheduler(), name="scheduler"
+                    )
                 self.stdscr.clear()
                 render(self.data_cols, self.tunnel_tasks, self.stdscr, sel)
                 char = self.stdscr.getch()

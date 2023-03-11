@@ -46,6 +46,7 @@ test_command = 'curl -s -o /dev/null -s -w "%{http_code}" -k -I -4 --socks5 sock
 test_command_result = "200"
 test_interval = 300
 test_timeout = 10
+auto_start = false
 
 [tunnel.socks5_3]
 address = "127.0.0.1"
@@ -55,6 +56,7 @@ test_command = 'curl -s -o /dev/null -s -w "%{http_code}" -k -I -4 --socks5 sock
 test_command_result = "200"
 test_interval = 300
 test_timeout = 10
+auto_start = true
 ```
 
 The tunnel names must be unique.</br>
