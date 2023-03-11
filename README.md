@@ -82,6 +82,9 @@ How often should the `test_command` be run.</br>
 ### test_timeout
 How long before the test is considered to have timed out.</br>
 
+### auto_start
+Whether to automatically start this tunnel  on startup.</br>
+
 ## keybindings
 `j` and `k` move you up and down.</br>
 
