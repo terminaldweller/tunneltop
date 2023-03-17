@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import copy
 import curses
+import datetime
 import enum
 import os
 import signal
@@ -445,7 +446,7 @@ class TunnelManager:
             "a",
             encoding="utf-8",
         ) as logfile:
-            logfile.write(log)
+            logfile.write(repr(datetime.datetime.now()) + ": " + log)
 
     async def restart_task(self, line_content: str) -> None:
         """restart a task"""
@@ -474,6 +475,7 @@ class TunnelManager:
                 self.data_cols[name]["disabled"] = "manual"
                 if name in self.tunnel_test_tasks:
                     self.tunnel_test_tasks[name].cancel()
+                    del self.tunnel_test_tasks[name]
                 await asyncio.sleep(0)
                 break
 
@@ -536,7 +538,7 @@ class TunnelManager:
                     return
                 await self.revive_failed_tasks()
                 for key, value in self.scheduler_table.items():
-                    if value == 0 and key not in self.tunnel_test_tasks:
+                    if value == 0:
                         self.write_log("rescheduling test for " + key + "\n")
                         tunnel_entry = self.data_cols[key]
                         test_task = asyncio.create_task(
@@ -546,8 +548,8 @@ class TunnelManager:
                             ),
                             name=key,
                         )
-                        await asyncio.sleep(0)
                         self.tunnel_test_tasks[key] = test_task
+                        await asyncio.sleep(0)
                     if value > 0:
                         self.scheduler_table[key] = self.scheduler_table[key] - 1
                     if value <= 0:
@@ -565,6 +567,9 @@ class TunnelManager:
                 self.write_log("\n")
         except asyncio.CancelledError:
             pass
+        except Exception as other_e:
+            if hasattr(other_e, "message"):
+                self.write_log(other_e.message)
 
     async def tui_loop(self) -> None:
         """the tui loop"""
