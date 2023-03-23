@@ -134,6 +134,15 @@ def ffs(
     return lines
 
 
+def get_visible_rows(max_rows: int, sel: int, row_count: int) -> typing.Tuple[int, int]:
+    """Returns the range of columns that will be visible based on max_rows."""
+    win_min_row = sel + 2 - int(max_rows / 2)
+    win_min_row = max(win_min_row, 0)
+    win_max_row = sel + 2 + int(max_rows / 2)
+    win_max_row = max(win_max_row, max_rows)
+    return win_min_row, win_max_row
+
+
 def render(
     data_cols: typing.Dict[str, typing.Dict[str, str]],
     tasks: typing.List[asyncio.Task],
@@ -141,6 +150,7 @@ def render(
     sel: int,
 ):
     """Render the text"""
+    visi_row: int = 0
     lines = ffs(
         2,
         ["NAME", "ADDRESS", "PORT", "STATUS", "STDOUT", "STDERR"],
@@ -153,6 +163,11 @@ def render(
         [v["stdout"] for _, v in data_cols.items()],
         [v["stderr"] for _, v in data_cols.items()],
     )
+
+    max_rows, _ = stdscr.getmaxyx()
+
+    win_min_row, win_max_row = get_visible_rows(max_rows - 3, sel, len(lines))
+
     iterator = iter(lines)
     stdscr.addstr(1, 1, lines[0], curses.color_pair(1))
     next(iterator)
@@ -160,6 +175,8 @@ def render(
     for task in tasks:
         name_list[task.get_name()] = True
     for i, (line, name) in enumerate(zip(iterator, data_cols.keys())):
+        if i > win_max_row - 1 or i < win_min_row:
+            continue
         color_num: int
         if name not in name_list:
             color_num = 4
@@ -176,19 +193,20 @@ def render(
                 color_num = 2
         if i == sel:
             stdscr.addstr(
-                (2 + i) % (len(lines) + 1),
+                (2 + visi_row) % (len(lines) + 1),
                 1,
                 line,
                 curses.color_pair(color_num + 1),
             )
         else:
             stdscr.addstr(
-                2 + i,
+                2 + visi_row,
                 1,
                 line,
                 curses.color_pair(color_num),
             )
         stdscr.addstr("\n")
+        visi_row += 1
 
     stdscr.attron(curses.color_pair(22))
     stdscr.box()
@@ -594,6 +612,7 @@ class TunnelManager:
                         self.scheduler(), name="scheduler"
                     )
                 self.stdscr.clear()
+                self.stdscr.box()
                 render(self.data_cols, self.tunnel_tasks, self.stdscr, sel)
                 char = self.stdscr.getch()
 
@@ -601,9 +620,9 @@ class TunnelManager:
                     sel = (sel + 1) % len(self.data_cols)
                 elif char == ord("k") or char == curses.KEY_UP:
                     sel = (sel - 1) % len(self.data_cols)
-                elif char == ord("g") or char == curses.KEY_UP:
+                elif char == ord("g"):
                     sel = 0
-                elif char == ord("G") or char == curses.KEY_UP:
+                elif char == ord("G"):
                     sel = len(self.data_cols) - 1
                 elif char == ord("r"):
                     line_content = self.stdscr.instr(sel + 2, 1)
