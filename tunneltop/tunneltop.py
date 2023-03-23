@@ -148,7 +148,7 @@ def render(
     tasks: typing.List[asyncio.Task],
     stdscr,
     sel: int,
-):
+) -> typing.List[str]:
     """Render the text"""
     visi_row: int = 0
     lines = ffs(
@@ -168,13 +168,22 @@ def render(
 
     win_min_row, win_max_row = get_visible_rows(max_rows - 3, sel, len(lines))
 
+    # stdscr.addstr(
+    #     max_rows - 2,
+    #     1,
+    #     repr(max_rows) + ":" + repr(win_min_row) + ":" + repr(win_max_row),
+    #     curses.color_pair(1),
+    # )
+
     iterator = iter(lines)
     stdscr.addstr(1, 1, lines[0], curses.color_pair(1))
     next(iterator)
+    column_keys_ordered: typing.List[str] = []
     name_list = {}
     for task in tasks:
         name_list[task.get_name()] = True
     for i, (line, name) in enumerate(zip(iterator, data_cols.keys())):
+        column_keys_ordered.append(name)
         if i > win_max_row - 1 or i < win_min_row:
             continue
         color_num: int
@@ -211,6 +220,8 @@ def render(
     stdscr.attron(curses.color_pair(22))
     stdscr.box()
     stdscr.attroff(curses.color_pair(22))
+
+    return column_keys_ordered
 
 
 # pylint: disable=too-many-instance-attributes
@@ -466,9 +477,8 @@ class TunnelManager:
         ) as logfile:
             logfile.write(repr(datetime.datetime.now()) + ": " + log)
 
-    async def restart_task(self, line_content: str) -> None:
+    async def restart_task(self, name: str) -> None:
         """restart a task"""
-        name: str = line_content[: line_content.find(" ")]
         for task in self.tunnel_tasks:
             if task.get_name() == name:
                 await self.stop_task(task, self.tunnel_tasks)
@@ -482,9 +492,8 @@ class TunnelManager:
                 await asyncio.sleep(0)
                 break
 
-    async def flip_task(self, line_content: str) -> None:
+    async def flip_task(self, name: str) -> None:
         """flip a task"""
-        name: str = line_content[: line_content.find(" ")]
         was_active: bool = False
         for task in self.tunnel_tasks:
             if task.get_name() == name:
@@ -508,9 +517,8 @@ class TunnelManager:
             self.data_cols[name]["disabled"] = ""
             await asyncio.sleep(0)
 
-    def run_single_test(self, line_content) -> None:
+    def run_single_test(self, task_name: str) -> None:
         """Set the counter to 0 so the scheduler will run the test"""
-        task_name: str = line_content[: line_content.find(" ")]
         if task_name in self.scheduler_table:
             self.scheduler_table[task_name] = 0
         else:
@@ -613,7 +621,9 @@ class TunnelManager:
                     )
                 self.stdscr.clear()
                 self.stdscr.box()
-                render(self.data_cols, self.tunnel_tasks, self.stdscr, sel)
+                column_keys_ordered = render(
+                    self.data_cols, self.tunnel_tasks, self.stdscr, sel
+                )
                 char = self.stdscr.getch()
 
                 if char == ord("j") or char == curses.KEY_DOWN:
@@ -625,16 +635,19 @@ class TunnelManager:
                 elif char == ord("G"):
                     sel = len(self.data_cols) - 1
                 elif char == ord("r"):
-                    line_content = self.stdscr.instr(sel + 2, 1)
-                    await self.restart_task(line_content.decode("utf-8"))
+                    # line_content = self.stdscr.instr(sel + 2, 1)
+                    # await self.restart_task(line_content.decode("utf-8"))
+                    await self.restart_task(column_keys_ordered[sel])
                 elif char == ord("t"):
-                    line_content = self.stdscr.instr(sel + 2, 1)
-                    self.run_single_test(line_content.decode("utf-8"))
+                    # line_content = self.stdscr.instr(sel + 2, 1)
+                    # self.run_single_test(line_content.decode("utf-8"))
+                    self.run_single_test(column_keys_ordered[sel])
                 elif char == ord("q"):
                     await self.quit()
                 elif char == ord("s"):
-                    line_content = self.stdscr.instr(sel + 2, 1)
-                    await self.flip_task(line_content.decode("utf-8"))
+                    # line_content = self.stdscr.instr(sel + 2, 1)
+                    # await self.flip_task(line_content.decode("utf-8"))
+                    await self.flip_task(column_keys_ordered[sel])
 
                 self.stdscr.refresh()
                 await asyncio.sleep(0)
