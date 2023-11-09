@@ -6,10 +6,13 @@ import copy
 import curses
 import datetime
 import enum
+import fcntl
+import http.server
 import os
 import signal
 import sys
 import typing
+import urllib
 
 import tomllib
 
@@ -47,6 +50,20 @@ class Argparser:  # pylint: disable=too-few-public-methods
             type=float,
             help="The delay between redraws in seconds, defaults to 5 seconds",
             default=5,
+        )
+        self.parser.add_argument(
+            "--port",
+            "-p",
+            type=int,
+            help="The port the http server will be listening on",
+            default=8112,
+        )
+        self.parser.add_argument(
+            "--addres",
+            "-a",
+            type=str,
+            help="The address the http server will be listening on",
+            default="::1",
         )
         self.args = self.parser.parse_args()
 
@@ -224,7 +241,40 @@ def render(
     return column_keys_ordered
 
 
+class ServerHandler(http.server.BaseHTTPRequestHandler):
+    """The HTTP handler"""
+
+    def __init__(self, pipe_r, pipe_w):
+        self.pipe_r = pipe_r
+        self.pipe_w = pipe_w
+
+    def do_GET(self):
+        """GET method"""
+        parsed_url = urllib.parse.urlparse(self.path)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+
+        if "status" in query_params:
+            pass
+
+
+class TunneltopServer:
+    """The HTTP server class"""
+
+    def __init__(self, address: str, port: int, pipe_r: int, pipe_w: int):
+        self.port = port
+        self.address = address
+        self.pipe_r = pipe_r
+        self.pipe_w = pipe_w
+        self.handler = ServerHandler(self.pipe_r, self.pipe_w)
+
+    def run(self):
+        """The etry point for the server"""
+        with http.server.HTTPServer((self.address, self.port), self.handler) as server:
+            server.serve_forever()
+
+
 # pylint: disable=too-many-instance-attributes
+# pylint: disable=too-many-public-methods
 class TunnelManager:
     """The tunnel top class"""
 
@@ -240,6 +290,12 @@ class TunnelManager:
         # we use this when its time to quit. this will prevent any
         # new tasks from being scheduled
         self.are_we_dying: bool = False
+
+        self.pipe_r, self.pipe_w = os.pipe()
+        flags = fcntl.fcntl(self.pipe_r, fcntl.F_GETFL)
+        fcntl.fcntl(self.pipe_r, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        flags = fcntl.fcntl(self.pipe_w, fcntl.F_GETFL)
+        fcntl.fcntl(self.pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
     def init_color_pairs(self) -> None:
         """Initialize the curses color pairs"""
@@ -276,7 +332,11 @@ class TunnelManager:
         """initialize the scheduler table"""
         result: typing.Dict[str, int] = {}
         for key, value in self.data_cols.items():
-            if "test_interval" in value and value["test_command"] != "":
+            if (
+                "test_interval" in value
+                and value["test_command"] != ""
+                and value["auto_start"] is True
+            ):
                 result[key] = 0
 
         return result
@@ -413,6 +473,8 @@ class TunnelManager:
                 if (
                     self.data_cols[k]["command"] != data_cols_new[k]["command"]
                     or self.data_cols[k]["port"] != data_cols_new[k]["port"]
+                    or self.data_cols[k]["test_command"]
+                    != data_cols_new[k]["test_command"]
                     or self.data_cols[k]["address"] != data_cols_new[k]["address"]
                 ):
                     for task in self.tunnel_tasks:
@@ -500,6 +562,7 @@ class TunnelManager:
                 await self.stop_task(task, self.tunnel_tasks)
                 was_active = True
                 self.data_cols[name]["disabled"] = "manual"
+                self.data_cols[name]["status"] = "UNKNW"
                 if name in self.tunnel_test_tasks:
                     self.tunnel_test_tasks[name].cancel()
                     del self.tunnel_test_tasks[name]
@@ -597,10 +660,37 @@ class TunnelManager:
             if hasattr(other_e, "message"):
                 self.write_log(other_e.message)
 
+    def server(self) -> None:
+        """the child that will run the HTTP server"""
+        pid = os.fork()
+        if pid < 0:
+            print("failed to launch server. quitting ...")
+            sys.exit(1)
+        elif pid > 0:  # child-1
+            pid = os.fork()
+            if pid < 0:
+                print("failed at double-forking the server...")
+                sys.exit(1)
+            elif pid > 0:  # child-2
+                http_server = TunneltopServer(
+                    self.argparser.args.address,
+                    self.argparser.args.port,
+                    self.pipe_r,
+                    self.pipe_w,
+                )
+                http_server.run()
+                sys.exit(0)
+            elif pid == 0:  # parent-2
+                sys.exit(0)
+        elif pid == 0:  # parent-1
+            pass
+
     async def tui_loop(self) -> None:
         """the tui loop"""
         sel: int = 0
         try:
+            # self.server()
+
             self.curses_init()
             # we spawn the tunnels and the test scheduler put them
             # in the background and then run the TUI loop
@@ -651,6 +741,17 @@ class TunnelManager:
 
                 self.stdscr.refresh()
                 await asyncio.sleep(0)
+
+                cols = list(self.data_cols.values())
+                up_count = len([col for col in cols if col["status"] == "UP"])
+                down_count = len([col for col in cols if col["status"] == "DOWN"])
+                unknown_count = len([col for col in cols if col["status"] == "UNKWN"])
+                timeout_count = len([col for col in cols if col["status"] == "TMOUT"])
+                with open("/tmp/tunneltop_stats", "w", encoding="utf-8") as stats_file:
+                    stats_file.write(
+                        f"{up_count}/{down_count}/{timeout_count}/{unknown_count}"
+                    )
+
         finally:
             curses.nocbreak()
             self.stdscr.keypad(False)
