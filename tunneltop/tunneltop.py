@@ -90,6 +90,16 @@ class Colors(enum.EnumType):
     hide_cursor = "\033[?25l"
 
 
+def write_log(log: str) -> None:
+    """A simple logger"""
+    with open(
+        os.path.expanduser("~/.tunneltoplog"),
+        "a",
+        encoding="utf-8",
+    ) as logfile:
+        logfile.write(repr(datetime.datetime.now()) + ": " + log + "\n")
+
+
 # pylint: disable=too-many-locals
 def ffs(
     offset: int,
@@ -161,12 +171,17 @@ def get_visible_rows(max_rows: int, sel: int, row_count: int) -> typing.Tuple[in
 
 
 def render(
+    window_available: bool,
     data_cols: typing.Dict[str, typing.Dict[str, str]],
     tasks: typing.List[asyncio.Task],
     stdscr,
     sel: int,
-) -> typing.List[str]:
+) -> typing.Optional[typing.List[str]]:
     """Render the text"""
+
+    if not window_available:
+        return None
+
     visi_row: int = 0
     lines = ffs(
         2,
@@ -181,16 +196,16 @@ def render(
         [v["stderr"] for _, v in data_cols.items()],
     )
 
-    max_rows, _ = stdscr.getmaxyx()
+    # max_rows, max_columns = stdscr.getmaxyx()
+    # write_log(repr(max_rows) + ":" + repr(max_columns))
+    max_columns, max_rows = os.get_terminal_size()
+    write_log(repr(max_rows) + ":" + repr(max_columns))
+
+    if max_rows < 20 or max_columns < 20:
+        stdscr.addstr(1, 1, "too small", curses.color_pair(1))
+        return None
 
     win_min_row, win_max_row = get_visible_rows(max_rows - 3, sel, len(lines))
-
-    # stdscr.addstr(
-    #     max_rows - 2,
-    #     1,
-    #     repr(max_rows) + ":" + repr(win_min_row) + ":" + repr(win_max_row),
-    #     curses.color_pair(1),
-    # )
 
     iterator = iter(lines)
     stdscr.addstr(1, 1, lines[0], curses.color_pair(1))
@@ -231,7 +246,7 @@ def render(
                 line,
                 curses.color_pair(color_num),
             )
-        stdscr.addstr("\n")
+        # stdscr.addstr("\n")
         visi_row += 1
 
     stdscr.attron(curses.color_pair(22))
@@ -290,6 +305,7 @@ class TunnelManager:
         # we use this when its time to quit. this will prevent any
         # new tasks from being scheduled
         self.are_we_dying: bool = False
+        self.window_available = True
 
         self.pipe_r, self.pipe_w = os.pipe()
         flags = fcntl.fcntl(self.pipe_r, fcntl.F_GETFL)
@@ -685,6 +701,13 @@ class TunnelManager:
         elif pid == 0:  # parent-1
             pass
 
+    def winch_sig_handler(self):
+        self.window_available = False
+        # curses.endwin()
+        self.stdscr.refresh()
+        self.stdscr.clear()
+        self.window_available = True
+
     async def tui_loop(self) -> None:
         """the tui loop"""
         sel: int = 0
@@ -704,18 +727,28 @@ class TunnelManager:
                 lambda: asyncio.create_task(self.sighup_handler()),
             )
 
+            # we basically refresh the screen when the terminal is resized
+            loop.add_signal_handler(signal.SIGWINCH, self.winch_sig_handler)
+
             while True:
                 if self.scheduler_task.cancelled() or self.scheduler_task.done():
                     self.scheduler_task = asyncio.create_task(
                         self.scheduler(), name="scheduler"
                     )
                 self.stdscr.clear()
-                self.stdscr.box()
+                # self.stdscr.box()
                 column_keys_ordered = render(
-                    self.data_cols, self.tunnel_tasks, self.stdscr, sel
+                    self.window_available,
+                    self.data_cols,
+                    self.tunnel_tasks,
+                    self.stdscr,
+                    sel,
                 )
                 char = self.stdscr.getch()
 
+                # if char == curses.KEY_RESIZE:
+                #     self.stdscr.refresh()
+                #     self.stdscr.clear()
                 if char == ord("j") or char == curses.KEY_DOWN:
                     sel = (sel + 1) % len(self.data_cols)
                 elif char == ord("k") or char == curses.KEY_UP:
@@ -724,20 +757,32 @@ class TunnelManager:
                     sel = 0
                 elif char == ord("G"):
                     sel = len(self.data_cols) - 1
+                elif char in (0x06, curses.KEY_NPAGE):  # ctrl-f
+                    _, term_cols = os.get_terminal_size()
+                    sel = (sel + term_cols) % len(self.data_cols)
+                elif char in (0x02, curses.KEY_PPAGE):  # ctrl-b
+                    _, term_cols = os.get_terminal_size()
+                    sel = (sel - term_cols) % len(self.data_cols)
+                elif char == 0x04:  # ctrl-d
+                    _, term_cols = os.get_terminal_size()
+                    term_cols = int(term_cols / 2)
+                    sel = (sel - term_cols) % len(self.data_cols)
+                elif char == 0x15:  # ctrl-u
+                    _, term_cols = os.get_terminal_size()
+                    term_cols = int(term_cols / 2)
+                    sel = (sel + term_cols) % len(self.data_cols)
                 elif char == ord("r"):
-                    # line_content = self.stdscr.instr(sel + 2, 1)
-                    # await self.restart_task(line_content.decode("utf-8"))
-                    await self.restart_task(column_keys_ordered[sel])
+                    if column_keys_ordered is not None:
+                        await self.restart_task(column_keys_ordered[sel])
                 elif char == ord("t"):
-                    # line_content = self.stdscr.instr(sel + 2, 1)
-                    # self.run_single_test(line_content.decode("utf-8"))
-                    self.run_single_test(column_keys_ordered[sel])
+                    if column_keys_ordered is not None:
+                        self.run_single_test(column_keys_ordered[sel])
                 elif char == ord("q"):
-                    await self.quit()
+                    if column_keys_ordered is not None:
+                        await self.quit()
                 elif char == ord("s"):
-                    # line_content = self.stdscr.instr(sel + 2, 1)
-                    # await self.flip_task(line_content.decode("utf-8"))
-                    await self.flip_task(column_keys_ordered[sel])
+                    if column_keys_ordered is not None:
+                        await self.flip_task(column_keys_ordered[sel])
 
                 self.stdscr.refresh()
                 await asyncio.sleep(0)
