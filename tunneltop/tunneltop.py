@@ -11,10 +11,9 @@ import http.server
 import os
 import signal
 import sys
+import tomllib
 import typing
 import urllib
-
-import tomllib
 
 
 class Argparser:  # pylint: disable=too-few-public-methods
@@ -58,6 +57,20 @@ class Argparser:  # pylint: disable=too-few-public-methods
             help="The port the http server will be listening on",
             default=8112,
         )
+        # self.parser.add_argument(
+        #     "--uid",
+        #     "-u",
+        #     type=int,
+        #     help="The uid to change privileges to",
+        #     default=None,
+        # )
+        # self.parser.add_argument(
+        #     "--gid",
+        #     "-g",
+        #     type=int,
+        #     help="The gid to change privileges to",
+        #     default=None,
+        # )
         self.parser.add_argument(
             "--addres",
             "-a",
@@ -98,6 +111,30 @@ def write_log(log: str) -> None:
         encoding="utf-8",
     ) as logfile:
         logfile.write(repr(datetime.datetime.now()) + ": " + log + "\n")
+
+
+def drop_privileges(uid: typing.Optional[int], gid: typing.Optional[int]) -> None:
+    """drop privileges(if run as root) and change to the given uid and gid"""
+    try:
+        if uid is None:
+            uid = os.getuid()
+        if gid is None:
+            gid = os.getgid()
+        if uid == 0 or gid == 0:
+            write_log("Cannot drop privileges to root. Exiting.")
+            sys.exit(1)
+        if uid < 0 or gid < 0:
+            write_log("Invalid uid or gid. Exiting.")
+            sys.exit(1)
+
+        os.setgid(gid)
+        os.setuid(uid)
+    except OSError as error:
+        write_log(f"Failed to drop privileges: {error}")
+        sys.exit(1)
+    else:
+        write_log("Privileges dropped successfully")
+        os.umask(0o077)
 
 
 # pylint: disable=too-many-locals
@@ -712,6 +749,8 @@ class TunnelManager:
         """the tui loop"""
         sel: int = 0
         try:
+            # drop_privileges(self.argparser.args.uid, self.argparser.args.gid)
+
             # self.server()
 
             self.curses_init()
@@ -783,6 +822,8 @@ class TunnelManager:
                 elif char == ord("s"):
                     if column_keys_ordered is not None:
                         await self.flip_task(column_keys_ordered[sel])
+                elif char == ord("/"):
+                    pass
 
                 self.stdscr.refresh()
                 await asyncio.sleep(0)
