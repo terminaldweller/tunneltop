@@ -57,20 +57,6 @@ class Argparser:  # pylint: disable=too-few-public-methods
             help="The port the http server will be listening on",
             default=8112,
         )
-        # self.parser.add_argument(
-        #     "--uid",
-        #     "-u",
-        #     type=int,
-        #     help="The uid to change privileges to",
-        #     default=None,
-        # )
-        # self.parser.add_argument(
-        #     "--gid",
-        #     "-g",
-        #     type=int,
-        #     help="The gid to change privileges to",
-        #     default=None,
-        # )
         self.parser.add_argument(
             "--addres",
             "-a",
@@ -101,6 +87,15 @@ class Colors(enum.EnumType):
     goo = "\x1b[38;5;22m"
     screen_clear = "\033c\033[3J"
     hide_cursor = "\033[?25l"
+
+
+def debug_write(log: str) -> None:
+    with open(
+        os.path.expanduser("~/.tunneltoplog"),
+        "a",
+        encoding="utf-8",
+    ) as logfile:
+        logfile.write(repr(datetime.datetime.now()) + ": " + log + "\n")
 
 
 def write_log(log: str) -> None:
@@ -233,10 +228,7 @@ def render(
         [v["stderr"] for _, v in data_cols.items()],
     )
 
-    # max_rows, max_columns = stdscr.getmaxyx()
-    # write_log(repr(max_rows) + ":" + repr(max_columns))
     max_columns, max_rows = os.get_terminal_size()
-    write_log(repr(max_rows) + ":" + repr(max_columns))
 
     if max_rows < 20 or max_columns < 20:
         stdscr.addstr(1, 1, "too small", curses.color_pair(1))
@@ -283,7 +275,6 @@ def render(
                 line,
                 curses.color_pair(color_num),
             )
-        # stdscr.addstr("\n")
         visi_row += 1
 
     stdscr.attron(curses.color_pair(22))
@@ -434,6 +425,8 @@ class TunnelManager:
                             "test_command_result": tunnel_value["test_command_result"],
                             "test_interval": tunnel_value["test_interval"],
                             "test_timeout": tunnel_value["test_timeout"],
+                            "self_stdout": "n/a",
+                            "self_stderr": "n/a",
                             "stdout": "n/a",
                             "stderr": "n/a",
                             "disabled": "",
@@ -748,11 +741,8 @@ class TunnelManager:
     async def tui_loop(self) -> None:
         """the tui loop"""
         sel: int = 0
+        persistent_text: str = ""
         try:
-            # drop_privileges(self.argparser.args.uid, self.argparser.args.gid)
-
-            # self.server()
-
             self.curses_init()
             # we spawn the tunnels and the test scheduler put them
             # in the background and then run the TUI loop
@@ -766,7 +756,7 @@ class TunnelManager:
                 lambda: asyncio.create_task(self.sighup_handler()),
             )
 
-            # we basically refresh the screen when the terminal is resized
+            # we refresh the screen when the terminal is resized
             loop.add_signal_handler(signal.SIGWINCH, self.winch_sig_handler)
 
             while True:
@@ -775,7 +765,14 @@ class TunnelManager:
                         self.scheduler(), name="scheduler"
                     )
                 self.stdscr.clear()
-                # self.stdscr.box()
+
+                if persistent_text != "":
+                    height, _ = self.stdscr.getmaxyx()
+                    self.stdscr.addstr(
+                        height - 1, 1, persistent_text, curses.color_pair(1)
+                    )
+                    persistent_text = ""
+
                 column_keys_ordered = render(
                     self.window_available,
                     self.data_cols,
@@ -785,9 +782,6 @@ class TunnelManager:
                 )
                 char = self.stdscr.getch()
 
-                # if char == curses.KEY_RESIZE:
-                #     self.stdscr.refresh()
-                #     self.stdscr.clear()
                 if char == ord("j") or char == curses.KEY_DOWN:
                     sel = (sel + 1) % len(self.data_cols)
                 elif char == ord("k") or char == curses.KEY_UP:
@@ -797,19 +791,19 @@ class TunnelManager:
                 elif char == ord("G"):
                     sel = len(self.data_cols) - 1
                 elif char in (0x06, curses.KEY_NPAGE):  # ctrl-f
-                    _, term_cols = os.get_terminal_size()
-                    sel = (sel + term_cols) % len(self.data_cols)
+                    _, term_rows = os.get_terminal_size()
+                    sel = (sel + term_rows) % len(self.data_cols)
                 elif char in (0x02, curses.KEY_PPAGE):  # ctrl-b
-                    _, term_cols = os.get_terminal_size()
-                    sel = (sel - term_cols) % len(self.data_cols)
+                    _, term_rows = os.get_terminal_size()
+                    sel = (sel - term_rows) % len(self.data_cols)
                 elif char == 0x04:  # ctrl-d
-                    _, term_cols = os.get_terminal_size()
-                    term_cols = int(term_cols / 2)
-                    sel = (sel - term_cols) % len(self.data_cols)
+                    _, term_rows = os.get_terminal_size()
+                    term_rows = int(term_rows / 2)
+                    sel = (sel - term_rows) % len(self.data_cols)
                 elif char == 0x15:  # ctrl-u
-                    _, term_cols = os.get_terminal_size()
-                    term_cols = int(term_cols / 2)
-                    sel = (sel + term_cols) % len(self.data_cols)
+                    _, term_rows = os.get_terminal_size()
+                    term_rows = int(term_rows / 2)
+                    sel = (sel + term_rows) % len(self.data_cols)
                 elif char == ord("r"):
                     if column_keys_ordered is not None:
                         await self.restart_task(column_keys_ordered[sel])
@@ -822,8 +816,21 @@ class TunnelManager:
                 elif char == ord("s"):
                     if column_keys_ordered is not None:
                         await self.flip_task(column_keys_ordered[sel])
-                elif char == ord("/"):
-                    pass
+                elif char in [curses.KEY_ENTER, 0x0A, 0x0D]:
+                    if column_keys_ordered is not None:
+                        logs = (
+                            self.data_cols[column_keys_ordered[sel]]["stdout"]
+                            + self.data_cols[column_keys_ordered[sel]]["stderr"]
+                        )
+                        debug_write(repr(sel))
+                        debug_write(column_keys_ordered[sel])
+                        debug_write(self.data_cols[column_keys_ordered[sel]]["stdout"])
+                        debug_write(self.data_cols[column_keys_ordered[sel]]["stderr"])
+                        debug_write(logs)
+                        persistent_text = logs
+                elif char == ord(":"):
+                    height, _ = self.stdscr.getmaxyx()
+                    self.stdscr.addstr(height - 1, 1, "Command: ", curses.color_pair(1))
 
                 self.stdscr.refresh()
                 await asyncio.sleep(0)
