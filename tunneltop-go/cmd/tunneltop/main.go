@@ -1,0 +1,682 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+
+	"tunneltop-go/internal/config"
+	"tunneltop-go/internal/tunnel"
+)
+
+func main() {
+	configPath := flag.String("config", config.DefaultPath(), "path to tunneltop TOML config")
+	delay := flag.Duration("delay", 0, "optional minimum redraw delay; 0 redraws on events")
+	debug := flag.Bool("debug", false, "write debug log to ~/.tunneltoplog")
+	flag.Parse()
+
+	if *debug {
+		setupDebugLog()
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	manager := tunnel.NewManager(ctx)
+	defer func() {
+		cancel()
+		manager.StopAll()
+	}()
+	manager.Apply(cfg)
+
+	app := tview.NewApplication()
+	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
+	tview.Styles.ContrastBackgroundColor = tcell.ColorDefault
+	tview.Styles.MoreContrastBackgroundColor = tcell.ColorDefault
+
+	status := tview.NewTextView().SetDynamicColors(true)
+	status.SetBorder(false)
+
+	searchInput := tview.NewInputField().
+		SetLabel("search: ").
+		SetFieldWidth(0)
+	searchInput.SetBorder(false)
+
+	table := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	table.SetBorder(true).SetTitle(" tunneltop-go ")
+
+	detail := tview.NewTextView().SetDynamicColors(true).SetScrollable(true).SetWrap(true)
+	detail.SetBorder(true).SetTitle(" details ")
+
+	help := tview.NewTextView().SetDynamicColors(true)
+	help.SetText("[gray]j/k arrows move  / search  Enter stdout/stderr  Esc/q back from log  s toggle on/off  r restart  t test  SIGHUP reload  Ctrl-C quit[-]")
+
+	mainRoot := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(status, 1, 0, false).
+		AddItem(searchInput, 1, 0, false).
+		AddItem(table, 0, 1, true).
+		AddItem(detail, 8, 0, false).
+		AddItem(help, 1, 0, false)
+
+	logView := tview.NewTextView().SetDynamicColors(true).SetScrollable(true).SetWrap(false)
+	logView.SetBorder(true).SetTitle(" stdout/stderr ")
+	logHelp := tview.NewTextView().SetDynamicColors(true)
+	logHelp.SetText("[gray]Esc/q back  PgUp/PgDn scroll  Home/End top/bottom[-]")
+	logRoot := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(logView, 0, 1, true).
+		AddItem(logHelp, 1, 0, false)
+
+	pages := tview.NewPages().
+		AddPage("main", mainRoot, true, true).
+		AddPage("logs", logRoot, true, false)
+
+	var current []tunnel.Snapshot
+	var lastDraw time.Time
+	message := "loaded " + config.ExpandPath(*configPath)
+	searchQuery := ""
+	searchMode := false
+	logMode := false
+	logTunnel := ""
+
+	selectedSnapshot := func() (tunnel.Snapshot, bool) {
+		row, _ := table.GetSelection()
+		if row < 1 || row > len(current) {
+			return tunnel.Snapshot{}, false
+		}
+		return current[row-1], true
+	}
+
+	selectedName := func() (string, bool) {
+		s, ok := selectedSnapshot()
+		if !ok {
+			return "", false
+		}
+		return s.Name, true
+	}
+
+	findSnapshot := func(name string) (tunnel.Snapshot, bool) {
+		for _, s := range manager.Snapshots() {
+			if s.Name == name {
+				return s, true
+			}
+		}
+		return tunnel.Snapshot{}, false
+	}
+
+	updateLogPage := func() {
+		if logTunnel == "" {
+			return
+		}
+		s, ok := findSnapshot(logTunnel)
+		if !ok {
+			logView.SetTitle(" stdout/stderr ")
+			logView.SetText("tunnel no longer exists")
+			return
+		}
+		logView.SetTitle(fmt.Sprintf(" stdout/stderr: %s ", s.Name))
+		logView.SetText(formatLogDetail(s))
+		logView.ScrollToEnd()
+	}
+
+	showLogPage := func() {
+		s, ok := selectedSnapshot()
+		if !ok {
+			return
+		}
+		logTunnel = s.Name
+		logMode = true
+		updateLogPage()
+		pages.ShowPage("logs")
+		pages.SwitchToPage("logs")
+		app.SetFocus(logView)
+	}
+
+	hideLogPage := func() {
+		logMode = false
+		pages.HidePage("logs")
+		pages.SwitchToPage("main")
+		app.SetFocus(table)
+	}
+
+	refresh := func(msg string) {
+		if msg != "" {
+			message = msg
+		}
+		if *delay > 0 && time.Since(lastDraw) < *delay {
+			return
+		}
+		lastDraw = time.Now()
+
+		selectedBefore := ""
+		if s, ok := selectedSnapshot(); ok {
+			selectedBefore = s.Name
+		}
+		row, _ := table.GetSelection()
+		all := manager.Snapshots()
+		current = filterSnapshots(all, searchQuery)
+		table.Clear()
+		setHeader(table)
+
+		up, down, tmout, unknown, off, running := 0, 0, 0, 0, 0, 0
+		for _, snap := range all {
+			if snap.Running {
+				running++
+			}
+			switch snap.Status {
+			case tunnel.StatusUp:
+				up++
+			case tunnel.StatusDown:
+				down++
+			case tunnel.StatusTimeout:
+				tmout++
+			case tunnel.StatusDisabled:
+				off++
+			default:
+				unknown++
+			}
+		}
+
+		for i, snap := range current {
+			rowIndex := i + 1
+			cells := []string{
+				snap.Name,
+				snap.Address,
+				fmt.Sprint(snap.Port),
+				string(snap.Status),
+				boolText(snap.Running),
+				pidText(snap.PID),
+				shorten(snap.Stdout, 36),
+				shorten(snap.Stderr, 36),
+				shorten(snap.LastError, 36),
+			}
+			for col, text := range cells {
+				cell := tview.NewTableCell(text).
+					SetTextColor(statusColor(snap.Status)).
+					SetExpansion(1)
+				table.SetCell(rowIndex, col, cell)
+			}
+		}
+
+		if len(current) == 0 {
+			table.SetCell(1, 0, tview.NewTableCell("no tunnels match search").SetTextColor(tcell.ColorYellow))
+			row = 1
+		} else if selectedBefore != "" {
+			row = findRowByName(current, selectedBefore)
+			if row == 0 {
+				row = 1
+			}
+		} else if row < 1 {
+			row = 1
+		} else if row > len(current) {
+			row = len(current)
+		}
+		table.Select(row, 0)
+
+		searchSuffix := ""
+		if searchQuery != "" {
+			searchSuffix = fmt.Sprintf("  search:%q matches:%d/%d", searchQuery, len(current), len(all))
+		}
+		status.SetText(fmt.Sprintf(
+			"[green]UP:%d[-] [red]DOWN:%d[-] [purple]TMOUT:%d[-] [yellow]UNKWN:%d[-] [gray]OFF:%d[-] running:%d total:%d%s  %s",
+			up, down, tmout, unknown, off, running, len(all), searchSuffix, message,
+		))
+		writeStats(up, down, tmout, unknown)
+		if logMode {
+			updateLogPage()
+		}
+	}
+
+	showDetail := func() {
+		s, ok := selectedSnapshot()
+		if !ok {
+			return
+		}
+		detail.SetText(formatDetail(s))
+	}
+
+	move := func(delta int) {
+		if len(current) == 0 {
+			return
+		}
+		row, _ := table.GetSelection()
+		if row < 1 {
+			row = 1
+		}
+		row += delta
+		if row < 1 {
+			row = 1
+		}
+		if row > len(current) {
+			row = len(current)
+		}
+		table.Select(row, 0)
+		showDetail()
+	}
+
+	searchInput.SetChangedFunc(func(text string) {
+		searchQuery = text
+		refresh("")
+		showDetail()
+	})
+	searchInput.SetDoneFunc(func(key tcell.Key) {
+		searchMode = false
+		app.SetFocus(table)
+		showDetail()
+	})
+
+	app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == tcell.KeyCtrlC {
+			app.Stop()
+			return nil
+		}
+
+		if searchMode {
+			return ev
+		}
+
+		if logMode {
+			switch ev.Key() {
+			case tcell.KeyEsc, tcell.KeyEnter:
+				hideLogPage()
+				return nil
+			case tcell.KeyRune:
+				switch ev.Rune() {
+				case 'q', 'b':
+					hideLogPage()
+					return nil
+				}
+			}
+			return ev
+		}
+
+		switch ev.Key() {
+		case tcell.KeyUp:
+			move(-1)
+			return nil
+		case tcell.KeyDown:
+			move(1)
+			return nil
+		case tcell.KeyPgUp, tcell.KeyCtrlB:
+			move(-10)
+			return nil
+		case tcell.KeyPgDn, tcell.KeyCtrlF:
+			move(10)
+			return nil
+		case tcell.KeyCtrlU:
+			move(-5)
+			return nil
+		case tcell.KeyCtrlD:
+			move(5)
+			return nil
+		case tcell.KeyEnter:
+			showLogPage()
+			return nil
+		case tcell.KeyRune:
+			switch ev.Rune() {
+			case 'q':
+				app.Stop()
+				return nil
+			case '/':
+				searchMode = true
+				app.SetFocus(searchInput)
+				return nil
+			case 'n':
+				if searchQuery != "" {
+					move(1)
+				}
+				return nil
+			case 'N':
+				if searchQuery != "" {
+					move(-1)
+				}
+				return nil
+			case 'j':
+				move(1)
+				return nil
+			case 'k':
+				move(-1)
+				return nil
+			case 'g':
+				if len(current) > 0 {
+					table.Select(1, 0)
+					showDetail()
+				}
+				return nil
+			case 'G':
+				if len(current) > 0 {
+					table.Select(len(current), 0)
+					showDetail()
+				}
+				return nil
+			case 's':
+				if name, ok := selectedName(); ok {
+					if err := manager.Toggle(name); err != nil {
+						refresh("toggle failed: " + err.Error())
+					} else {
+						refresh("toggled " + name)
+					}
+				}
+				return nil
+			case 'r':
+				if name, ok := selectedName(); ok {
+					if err := manager.Restart(name); err != nil {
+						refresh("restart failed: " + err.Error())
+					} else {
+						refresh("restarted " + name)
+					}
+				}
+				return nil
+			case 't':
+				if name, ok := selectedName(); ok {
+					if err := manager.RunTestNow(name); err != nil {
+						refresh("test failed: " + err.Error())
+					} else {
+						refresh("testing " + name)
+					}
+				}
+				return nil
+			}
+		}
+		return ev
+	})
+
+	go func() {
+		for ev := range manager.Events() {
+			manager.ApplyEvent(ev)
+			app.QueueUpdateDraw(func() {
+				refresh(eventMessage(ev))
+				showDetail()
+			})
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for sig := range sigCh {
+			switch sig {
+			case syscall.SIGHUP:
+				newCfg, err := config.Load(*configPath)
+				app.QueueUpdateDraw(func() {
+					if err != nil {
+						refresh("reload failed: " + err.Error())
+						return
+					}
+					manager.Apply(newCfg)
+					refresh("reloaded " + config.ExpandPath(*configPath))
+					showDetail()
+				})
+			case syscall.SIGINT, syscall.SIGTERM:
+				app.Stop()
+				return
+			}
+		}
+	}()
+
+	refresh("")
+	showDetail()
+	if err := app.SetRoot(pages, true).SetFocus(table).EnableMouse(true).Run(); err != nil {
+		log.Printf("tui exited: %v", err)
+	}
+}
+
+func setupDebugLog() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	path := home + string(os.PathSeparator) + ".tunneltoplog"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return
+	}
+	log.SetOutput(f)
+}
+
+func setHeader(table *tview.Table) {
+	headers := []string{"NAME", "ADDRESS", "PORT", "STATUS", "RUN", "PID", "STDOUT", "STDERR", "ERROR"}
+	for col, h := range headers {
+		table.SetCell(0, col, tview.NewTableCell(h).
+			SetTextColor(tcell.ColorAqua).
+			SetSelectable(false).
+			SetExpansion(1))
+	}
+}
+
+func filterSnapshots(snaps []tunnel.Snapshot, query string) []tunnel.Snapshot {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return snaps
+	}
+	out := make([]tunnel.Snapshot, 0, len(snaps))
+	for _, snap := range snaps {
+		port := strconv.Itoa(snap.Port)
+		if strings.Contains(strings.ToLower(snap.Name), query) || strings.Contains(port, query) {
+			out = append(out, snap)
+		}
+	}
+	return out
+}
+
+func findRowByName(snaps []tunnel.Snapshot, name string) int {
+	for i, snap := range snaps {
+		if snap.Name == name {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func statusColor(s tunnel.Status) tcell.Color {
+	switch s {
+	case tunnel.StatusUp:
+		return tcell.ColorGreen
+	case tunnel.StatusDown:
+		return tcell.ColorRed
+	case tunnel.StatusTimeout:
+		return tcell.ColorPurple
+	case tunnel.StatusDisabled:
+		return tcell.ColorGray
+	case tunnel.StatusStarting:
+		return tcell.ColorBlue
+	default:
+		return tcell.ColorYellow
+	}
+}
+
+func boolText(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func pidText(pid int) string {
+	if pid == 0 {
+		return "-"
+	}
+	return fmt.Sprint(pid)
+}
+
+func shorten(s string, n int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "n/a"
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "n/a"
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
+
+func formatDetail(s tunnel.Snapshot) string {
+	return fmt.Sprintf(`[white]name[-]: %s
+[white]address[-]: %s
+[white]port[-]: %d
+[white]status[-]: [%s]%s[-]
+[white]running[-]: %t
+[white]pid[-]: %s
+[white]auto_start[-]: %t
+[white]last_started[-]: %s
+[white]last_test[-]: %s
+[white]stdout_lines[-]: %d
+[white]stderr_lines[-]: %d
+[white]test_output_lines[-]: %d
+
+[white]latest stdout[-]
+%s
+
+[white]latest stderr[-]
+%s
+
+[white]last_error[-]
+%s
+`,
+		s.Name,
+		s.Address,
+		s.Port,
+		colorName(s.Status), s.Status,
+		s.Running,
+		pidText(s.PID),
+		s.AutoStart,
+		formatTime(s.LastStarted),
+		formatTime(s.LastTest),
+		len(s.StdoutLog),
+		len(s.StderrLog),
+		len(s.TestLog),
+		value(s.Stdout),
+		value(s.Stderr),
+		value(s.LastError),
+	)
+}
+
+func formatLogDetail(s tunnel.Snapshot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[white]name[-]: %s\n", s.Name)
+	fmt.Fprintf(&b, "[white]address[-]: %s\n", s.Address)
+	fmt.Fprintf(&b, "[white]port[-]: %d\n", s.Port)
+	fmt.Fprintf(&b, "[white]status[-]: [%s]%s[-]\n", colorName(s.Status), s.Status)
+	fmt.Fprintf(&b, "[white]running[-]: %t\n", s.Running)
+	fmt.Fprintf(&b, "[white]pid[-]: %s\n", pidText(s.PID))
+	fmt.Fprintf(&b, "[white]last_started[-]: %s\n", formatTime(s.LastStarted))
+	fmt.Fprintf(&b, "[white]last_test[-]: %s\n", formatTime(s.LastTest))
+	fmt.Fprintf(&b, "[white]stored stdout/stderr/test lines[-]: %d/%d/%d\n\n", len(s.StdoutLog), len(s.StderrLog), len(s.TestLog))
+
+	b.WriteString("[green]--- stdout ---[-]\n")
+	if len(s.StdoutLog) == 0 {
+		b.WriteString("n/a\n")
+	} else {
+		for _, line := range s.StdoutLog {
+			b.WriteString(escapeTview(line))
+			b.WriteByte('\n')
+		}
+	}
+
+	b.WriteString("\n[red]--- stderr ---[-]\n")
+	if len(s.StderrLog) == 0 {
+		b.WriteString("n/a\n")
+	} else {
+		for _, line := range s.StderrLog {
+			b.WriteString(escapeTview(line))
+			b.WriteByte('\n')
+		}
+	}
+
+	b.WriteString("\n[yellow]--- test command output ---[-]\n")
+	if len(s.TestLog) == 0 {
+		b.WriteString("n/a\n")
+	} else {
+		for _, line := range s.TestLog {
+			b.WriteString(escapeTview(line))
+			b.WriteByte('\n')
+		}
+	}
+
+	if strings.TrimSpace(s.LastError) != "" {
+		b.WriteString("\n[yellow]--- last error ---[-]\n")
+		b.WriteString(escapeTview(s.LastError))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func escapeTview(s string) string {
+	return strings.ReplaceAll(s, "[", "[[")
+}
+
+func colorName(s tunnel.Status) string {
+	switch s {
+	case tunnel.StatusUp:
+		return "green"
+	case tunnel.StatusDown:
+		return "red"
+	case tunnel.StatusTimeout:
+		return "purple"
+	case tunnel.StatusDisabled:
+		return "gray"
+	case tunnel.StatusStarting:
+		return "blue"
+	default:
+		return "yellow"
+	}
+}
+
+func value(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "n/a"
+	}
+	return s
+}
+
+func eventMessage(ev tunnel.Event) string {
+	switch ev.Kind {
+	case tunnel.EventStarted:
+		return fmt.Sprintf("%s started pid=%d", ev.Name, ev.PID)
+	case tunnel.EventExited:
+		if ev.Err != nil {
+			return fmt.Sprintf("%s exited: %v", ev.Name, ev.Err)
+		}
+		return ev.Name + " exited"
+	case tunnel.EventStopped:
+		return ev.Name + " stopped"
+	case tunnel.EventTestResult:
+		return fmt.Sprintf("%s test -> %s", ev.Name, ev.Status)
+	case tunnel.EventError:
+		if ev.Err != nil {
+			return fmt.Sprintf("%s error: %v", ev.Name, ev.Err)
+		}
+		return fmt.Sprintf("%s error: %s", ev.Name, ev.Line)
+	default:
+		return ""
+	}
+}
+
+func writeStats(up, down, timeout, unknown int) {
+	_ = os.WriteFile("/tmp/tunneltop_stats", []byte(fmt.Sprintf("%d/%d/%d/%d", up, down, timeout, unknown)), 0600)
+}
